@@ -3,11 +3,11 @@ import type { ComputedRef, Ref, TransitionGroupProps, WritableComputedRef } from
 import type { RouteLocationNormalized, Router } from 'vue-router'
 import { clamp } from '@antfu/utils'
 import { parseRangeString } from '@slidev/parser/utils'
-import { createSharedComposable } from '@vueuse/core'
-import { computed, ref, watch } from 'vue'
+import { createSharedComposable, injectLocal } from '@vueuse/core'
+import { computed, hasInjectionContext, ref, toRaw, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { slides } from '#slidev/slides'
-import { CLICKS_MAX } from '../constants'
+import { CLICKS_MAX, injectionSlidevContext } from '../constants'
 import { configs } from '../env'
 import { useRouteQuery } from '../logic/route'
 import { getSlide, getSlidePath } from '../logic/slides'
@@ -26,6 +26,7 @@ export interface SlidevContextNav {
   currentSlideRoute: ComputedRef<SlideRoute>
   currentTransition: ComputedRef<TransitionGroupProps | undefined>
   currentLayout: ComputedRef<string>
+  currentFrontmatter: ComputedRef<Record<string, any>>
 
   nextRoute: ComputedRef<SlideRoute>
   prevRoute: ComputedRef<SlideRoute>
@@ -105,6 +106,7 @@ export function useNavBase(
   const currentPath = computed(() => getSlidePath(currentSlideRoute.value, isPresenter.value))
   const currentSlideNo = computed(() => currentSlideRoute.value.no)
   const currentLayout = computed(() => currentSlideRoute.value.meta?.layout || (currentSlideNo.value === 1 ? 'cover' : 'default'))
+  const currentFrontmatter = computed(() => currentSlideRoute.value.meta.slide.frontmatter)
 
   const clicks = computed(() => clicksContext.value.current)
   const clicksStart = computed(() => clicksContext.value.clicksStart)
@@ -223,6 +225,7 @@ export function useNavBase(
     currentPage: currentSlideNo,
     currentSlideRoute,
     currentLayout,
+    currentFrontmatter,
     currentTransition,
     clicksDirection,
     nextRoute,
@@ -362,7 +365,7 @@ const useNavState = createSharedComposable((): SlidevContextNavState => {
   }
 })
 
-export const useNav = createSharedComposable((): SlidevContextNavFull => {
+const useSharedNav = createSharedComposable((): SlidevContextNavFull => {
   const state = useNavState()
   const router = useRouter()
 
@@ -398,3 +401,22 @@ export const useNav = createSharedComposable((): SlidevContextNavFull => {
     ...state,
   }
 })
+
+export function useNav(): SlidevContextNavFull {
+  const nav = useSharedNav()
+  // `useNav()` is also called outside of `setup()`, most notably from the
+  // `mounted`/`created` hooks of the `v-motion` and `v-mark` directives.
+  // `injectLocal` throws there, and there is no slide-local context to read
+  // anyway, so fall back to the shared nav.
+  const context = hasInjectionContext()
+    ? injectLocal(injectionSlidevContext, undefined)
+    : undefined
+  if (!context)
+    return nav
+
+  const localNav = toRaw(context).nav as unknown as SlidevContextNav
+  return {
+    ...nav,
+    ...localNav,
+  }
+}

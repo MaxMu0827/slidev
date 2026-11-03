@@ -1,10 +1,9 @@
 import type { ResolvedSlidevOptions, SlidevConfig, SlidevData } from '@slidev/types'
 import type { LogLevel, ViteDevServer } from 'vite'
 import type { Argv } from 'yargs'
-import { exec } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
-import path from 'node:path'
 import process from 'node:process'
 import * as readline from 'node:readline'
 import { verifyConfig } from '@slidev/parser'
@@ -12,6 +11,7 @@ import { blue, bold, cyan, cyanBright, dim, gray, green, underline, yellow } fro
 import equal from 'fast-deep-equal'
 import { getPort } from 'get-port-please'
 import openBrowser from 'open'
+import path from 'pathe'
 import yargs from 'yargs'
 import { version } from '../package.json'
 import { createServer } from './commands/serve'
@@ -146,6 +146,8 @@ cli.command(
             host,
             // @ts-expect-error Vite <= 4
             force,
+            // Allow Cloudflare Quick Tunnel domains when tunneling is enabled
+            ...(tunnel && remote != null ? { allowedHosts: ['.trycloudflare.com'] } : {}),
           },
           optimizeDeps: {
             // Vite 5
@@ -202,7 +204,7 @@ cli.command(
 
       let publicIp: string | undefined
       if (remote)
-        publicIp = await import('public-ip').then(r => r.publicIpv4())
+        publicIp = await resolvePublicIp()
 
       lastRemoteUrl = printInfo(options, port, base, remote, tunnelUrl, publicIp)
       if (open)
@@ -218,6 +220,15 @@ cli.command(
       }
       catch {
         console.log(yellow(`\n  Could not open the browser automatically. Please open ${url} in your browser.\n`))
+      }
+    }
+
+    async function resolvePublicIp() {
+      try {
+        return await import('public-ip').then(r => r.publicIpv4())
+      }
+      catch {
+        console.log(yellow('\n  Could not determine the public IP address.\n'))
       }
     }
 
@@ -249,7 +260,8 @@ cli.command(
         name: 'e',
         fullname: 'edit',
         action() {
-          exec(`code "${entry}"`)
+          const editor = process.env.EDITOR || 'code'
+          execFile(editor, [entry])
         },
       },
       {
@@ -365,8 +377,8 @@ cli.command(
     })
     .option('router-mode', {
       type: 'string',
-      choices: ['hash', 'history'],
-      describe: 'override routerMode in the built output (hash for subdirectory deploys like GitHub Pages)',
+      choices: ['hash', 'history', 'memory'],
+      describe: 'override routerMode in the built output (hash for subdirectory deploys like GitHub Pages; memory keeps the slide number out of the URL, for kiosk/follower decks)',
     })
     .option('inspect', {
       default: false,
@@ -380,7 +392,7 @@ cli.command(
     const { build } = await import('./commands/build')
 
     for (const entryFile of entry as unknown as string[]) {
-      const options = await resolveOptions({ entry: entryFile, theme, inspect, download, base, withoutNotes, routerMode: routerMode as 'hash' | 'history' | undefined }, 'build')
+      const options = await resolveOptions({ entry: entryFile, theme, inspect, download, base, withoutNotes, routerMode: routerMode as 'hash' | 'history' | 'memory' | undefined }, 'build')
 
       printInfo(options)
       await build(
@@ -409,6 +421,18 @@ cli.command(
       parser.prettify(md)
       await parser.save(md)
     }
+  },
+)
+
+cli.command(
+  'mcp [entry]',
+  'Start an MCP (Model Context Protocol) server over stdio for AI agents to inspect and edit the slides',
+  args => commonOptions(args)
+    .strict()
+    .help(),
+  async ({ entry }) => {
+    const { startMcpStdioServer } = await import('./mcp/stdio')
+    await startMcpStdioServer(await resolveEntry(entry))
   },
 )
 
@@ -618,7 +642,7 @@ function exportOptions<T>(args: Argv<T>) {
     })
     .option('format', {
       type: 'string',
-      choices: ['pdf', 'png', 'pptx', 'md'],
+      choices: ['pdf', 'png', 'pptx', 'pptx-editable', 'md'],
       describe: 'output format',
     })
     .option('timeout', {
@@ -711,6 +735,8 @@ function printInfo(
     console.log(`${dim('  slides overview ')}    > ${blue(`${baseUrl}${overviewPath}`)}`)
     if (options.utils.define.__SLIDEV_FEATURE_BROWSER_EXPORTER__)
       console.log(`${dim('  export slides')}       > ${blue(`${baseUrl}/export/`)}`)
+    if (options.mode === 'dev' && options.data.config.mcp !== false)
+      console.log(`${dim('  mcp server    ')}     > ${blue(`http://localhost:${bold(port)}/__mcp`)}`)
     if (options.inspect)
       console.log(`${dim('  vite inspector')}      > ${yellow(`${baseUrl}/__inspect/`)}`)
 
@@ -719,7 +745,7 @@ function printInfo(
     if (remote !== undefined) {
       Object.values(os.networkInterfaces())
         .forEach(v => (v || [])
-          .filter(details => String(details.family).slice(-1) === '4' && !details.address.includes('127.0.0.1'))
+          .filter(details => String(details.family).endsWith('4') && !details.address.includes('127.0.0.1'))
           .forEach(({ address }) => {
             lastRemoteUrl = `http://${address}:${portAndBase}${entryPath}`
             console.log(`${dim('  remote control ')}     > ${blue(lastRemoteUrl)}`)

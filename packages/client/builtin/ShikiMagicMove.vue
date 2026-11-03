@@ -41,7 +41,7 @@ const props = defineProps({
 })
 
 const steps = JSON.parse(lz.decompressFromBase64(props.stepsLz)) as KeyedTokensInfo[]
-const { $clicksContext: clicks, $scale: scale, $zoom: zoom } = useSlideContext()
+const { $clicksContext: clicks, $scale: scale, $zoom: zoom, $frontmatter } = useSlideContext()
 const { isPrintMode } = useNav()
 const id = makeId()
 
@@ -51,10 +51,11 @@ const isFirstTick = ref(true)
 const container = ref<HTMLElement>()
 
 const showCopyButton = computed(() => {
-  if (!configs.codeCopy)
+  const codeCopy = $frontmatter?.codeCopy ?? configs.codeCopy
+  if (!codeCopy)
     return false
 
-  const magicCopy = configs.magicMoveCopy
+  const magicCopy = $frontmatter?.magicMoveCopy ?? configs.magicMoveCopy
   if (!magicCopy)
     return false
 
@@ -179,12 +180,13 @@ onMounted(() => {
       :step="stepIndex"
       :animate="!isPrintMode"
       :options="{
+        stagger: 1,
+        ...configs.shiki?.magicMove,
         globalScale: scale * zoom,
         // Use duration 0 to skip animation instead of using the animate prop,
         // because moving from non-animated to animated causes issues with
         // new elements. Unfortunately, this causes a flash.
         duration: isFirstTick ? 0 : $props.duration,
-        stagger: 1,
       }"
     />
     <button
